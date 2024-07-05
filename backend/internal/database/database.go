@@ -10,7 +10,9 @@ import (
 	"time"
 
 	_ "github.com/joho/godotenv/autoload"
+	"github.com/markbates/goth"
 	_ "github.com/mattn/go-sqlite3"
+	m "github.com/raziel-aleman/go-todo-app/internal/models"
 )
 
 // Service represents a service that interacts with a database.
@@ -23,13 +25,15 @@ type Service interface {
 	// It returns an error if the connection cannot be closed.
 	Close() error
 
-	GetAll() ([]Todo, error)
+	GetAll() ([]m.Todo, error)
 
 	MarkDone(int64) (int, error)
 
 	Create(string, string) (int, error)
 
 	Edit(int, string, string) (int, error)
+
+	SaveUser(goth.User) (string, error)
 }
 
 type service struct {
@@ -41,12 +45,12 @@ var (
 	dbInstance *service
 )
 
-type Todo struct {
-	ID    int    `json:"id"`
-	Title string `json:"title"`
-	Done  bool   `json:"done"`
-	Body  string `json:"body"`
-}
+// type Todo struct {
+// 	ID    int    `json:"id"`
+// 	Title string `json:"title"`
+// 	Done  bool   `json:"done"`
+// 	Body  string `json:"body"`
+// }
 
 func New() Service {
 	// Reuse Connection
@@ -61,17 +65,36 @@ func New() Service {
 		log.Fatal(err)
 	}
 
-	// Table initializaiton query if it does not exist
-	const createTable string = `CREATE TABLE IF NOT EXISTS todos (
-		id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-		title TEXT NOT NULL,
-		description	TEXT NOT NULL,
-		done INTEGER NOT NULL DEFAULT 0
+	// Users table initializaiton query if it does not exist
+	const createUsersTable string = `CREATE TABLE IF NOT EXISTS users (
+		userId INTERGER NOT NULL PRIMARY KEY,
+		name TEXT NOT NULL,
+		email	TEXT NOT NULL,
+		avatarUrl DATE NOT NULL,
+		accessToken TEXT NOT NULL,
+		refreshToken TEXT NOT NULL,
+		expiresAt DATE NOT NULL
 	);`
 
 	// Execute initialization query
-	if _, err := db.Exec(createTable); err != nil {
-		fmt.Println("Error creating todos table")
+	if _, err := db.Exec(createUsersTable); err != nil {
+		fmt.Println("Error creating User table")
+		log.Fatal(err)
+	}
+
+	// Todos table initializaiton query if it does not exist
+	const createTodosTable string = `CREATE TABLE IF NOT EXISTS todos (
+		id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+		title TEXT NOT NULL,
+		description	TEXT NOT NULL,
+		done INTEGER NOT NULL DEFAULT 0,
+		userId INTEGER NOT NULL,
+		FOREIGN KEY (userId) REFERENCES users (userId)
+	);`
+
+	// Execute initialization query
+	if _, err := db.Exec(createTodosTable); err != nil {
+		fmt.Println("Error creating Todo table")
 		log.Fatal(err)
 	}
 
@@ -142,8 +165,8 @@ func (s *service) Close() error {
 }
 
 // Retrieves all todos
-func (s *service) GetAll() ([]Todo, error) {
-	todos := []Todo{}
+func (s *service) GetAll() ([]m.Todo, error) {
+	todos := []m.Todo{}
 	rows, err := s.db.Query("SELECT * FROM todos")
 	if err != nil {
 		log.Fatal("Error selecting todos from database")
@@ -151,7 +174,7 @@ func (s *service) GetAll() ([]Todo, error) {
 	}
 	defer rows.Close()
 	for rows.Next() {
-		todo := Todo{}
+		todo := m.Todo{}
 		err := rows.Scan(&todo.ID, &todo.Title, &todo.Body, &todo.Done)
 		if err != nil {
 			log.Fatal("Error scanning todos from select")
@@ -207,4 +230,33 @@ func (s *service) Edit(id int, newTitle string, newDescription string) (int, err
 	}
 
 	return int(id), nil
+}
+
+// Save user to DB upon successful login
+func (s *service) SaveUser(user goth.User) (string, error) {
+	var userExists bool
+
+	// Query for a value based on a single row.
+	if err := s.db.QueryRow("SELECT userID FROM users WHERE userId = ?;",
+		user.UserID).Scan(&userExists); err != nil {
+		if err == sql.ErrNoRows {
+			_, err := s.db.Exec("INSERT INTO users VALUES(?,?,?,?,?,?,?);",
+				user.UserID,
+				user.Name,
+				user.Email,
+				user.AvatarURL,
+				user.AccessToken,
+				user.RefreshToken,
+				user.ExpiresAt)
+
+			if err != nil {
+				fmt.Println("could not insert new user to database")
+				return string(0), err
+			}
+
+			return user.UserID, nil
+		}
+	}
+	fmt.Println("user already exists in database")
+	return string(0), fmt.Errorf("user already exists in database")
 }

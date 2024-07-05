@@ -1,6 +1,6 @@
 Technologies
 
-- [Fiber](https://gofiber.io/) - Go web server backend
+- [Chi](https://go-chi.io/#/) - Go web server backend
 - [Vite](https://vitejs.dev/) - Client frontend
 - [Mantine](https://mantine.dev/) - React component library
 - [TypeScript](https://www.typescriptlang.org/) - Static types

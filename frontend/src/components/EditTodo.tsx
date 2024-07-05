@@ -35,7 +35,6 @@ const EditTodo = ({ mutate, data }: EditTodoProps) => {
   });
 
   const editTodo = async (values: { title: string; body: string }) => {
-    console.log(JSON.stringify(values));
     const edited = await fetch(`${ENDPOINT}/api/todos/${data.id}/edit`, {
       method: "PATCH",
       headers: {

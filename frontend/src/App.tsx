@@ -23,6 +23,10 @@ const fetcher = (url: string) =>
 export function App() {
   const { data, mutate } = useSWR<Todo[]>("api/todos", fetcher);
 
+  const handleLogout = () => {
+    window.location.href = "http://localhost:8080/auth/logout/github";
+  };
+
   const markTodoAddDone = async (id: number) => {
     const updated = await fetch(`${ENDPOINT}/api/todos/${id}/done`, {
       method: "PATCH",
@@ -96,6 +100,9 @@ export function App() {
           })}
         </List>
         <AddTodo mutate={mutate} />
+        <div>
+          <button onClick={handleLogout}>Logout</button>
+        </div>
       </Box>
     </MantineProvider>
   );

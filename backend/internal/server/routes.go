@@ -1,113 +1,217 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"net/http"
+	"strconv"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/raziel-aleman/go-todo-app/internal/models"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
+	"github.com/markbates/goth/gothic"
 )
 
-type NewTodo struct {
-	Title       string `json:"title"`
-	Description string `json:"body"`
+type ctxKey string
+
+const providerKey ctxKey = "provider"
+
+func (s *Server) RegisterRoutes() http.Handler {
+	r := chi.NewRouter()
+
+	r.Use(cors.Handler(cors.Options{
+		AllowedOrigins: []string{"http://localhost:3000"},
+		AllowedHeaders: []string{"Origin", "Content-Type", "Accept", "All"},
+		AllowedMethods: []string{"GET", "PATCH", "POST"},
+	}))
+
+	r.Use(middleware.Logger)
+
+	r.Get("/", s.HelloWorldHandler)
+
+	r.Get("/health", s.healthHandler)
+
+	r.Get("/auth/{provider}/callback", s.getAuthCallbackFunction)
+
+	r.Get("/auth/logout/{provider}", s.getAuthLogoutFunction)
+
+	r.Get("/auth/{provider}", s.getAuthLoginFunction)
+
+	r.Get("/api/todos", s.getAllHandler)
+
+	r.Patch("/api/todos/{id}/done", s.markDoneHandler)
+
+	r.Post("/api/todos", s.createHandler)
+
+	r.Patch("/api/todos/{id}/edit", s.editHandler)
+
+	return r
 }
 
-func (s *FiberServer) RegisterFiberRoutes() {
-	s.App.Get("/", s.HelloWorldHandler)
+func (s *Server) HelloWorldHandler(w http.ResponseWriter, r *http.Request) {
+	resp := make(map[string]string)
+	resp["message"] = "Hello World"
 
-	s.App.Get("/health", s.healthHandler)
-
-	s.App.Get("/healthcheck", s.healthCheckHandler)
-
-	s.App.Get("/api/todos", s.getAllHandler)
-
-	s.App.Patch("/api/todos/:id/done", s.markDoneHandler)
-
-	s.App.Post("/api/todos/", s.createHandler)
-
-	s.App.Patch("/api/todos/:id/edit", s.editHandler)
-}
-
-func (s *FiberServer) HelloWorldHandler(c *fiber.Ctx) error {
-	resp := fiber.Map{
-		"message": "Hello World!",
+	jsonResp, err := json.Marshal(resp)
+	if err != nil {
+		log.Fatalf("error handling JSON marshal. Err: %v", err)
 	}
 
-	return c.JSON(resp)
+	_, _ = w.Write(jsonResp)
 }
 
-func (s *FiberServer) healthHandler(c *fiber.Ctx) error {
-	return c.JSON(s.db.Health())
+func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
+	jsonResp, _ := json.Marshal(s.db.Health())
+	_, _ = w.Write(jsonResp)
 }
 
-func (s *FiberServer) healthCheckHandler(c *fiber.Ctx) error {
-	return c.SendString("OK")
+func (s *Server) getAuthLoginFunction(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	q.Add("provider", chi.URLParam(r, "provider"))
+	r.URL.RawQuery = q.Encode()
+
+	// // make provider available to the handler
+	// provider := chi.URLParam(r, "provider")
+	// r = r.WithContext(context.WithValue(context.Background(), "provider", provider))
+
+	gothic.BeginAuthHandler(w, r)
 }
 
-func (s *FiberServer) getAllHandler(c *fiber.Ctx) error {
-	rows, _ := s.db.GetAll()
+func (s *Server) getAuthCallbackFunction(w http.ResponseWriter, r *http.Request) {
+	// make provider available to the handler
+	providerValue := chi.URLParam(r, "provider")
+	r = r.WithContext(context.WithValue(context.Background(), providerKey, providerValue))
 
-	return c.JSON(rows)
-}
-
-func (s *FiberServer) markDoneHandler(c *fiber.Ctx) error {
-	id, err := c.ParamsInt("id")
+	user, err := gothic.CompleteUserAuth(w, r)
 
 	if err != nil {
-		return c.Status(401).SendString("Invalid id")
+		fmt.Println(err)
+		fmt.Fprintln(w, "Error completing user auth\n", r)
+		return
+	}
+
+	fmt.Println(user)
+	s.db.SaveUser(user)
+
+	// store := sessions.NewCookieStore([]byte("super-secret-key"))
+
+	// session, _ := store.Get(r, "session")
+	// session.Values["authenticated"] = true
+	// session.Values["name"] = user.Name
+	// session.Values["access_token"] = user.AccessToken
+	// session.Save(r, w)
+
+	http.Redirect(w, r, "http://localhost:3000/home", http.StatusFound)
+}
+
+func (s *Server) getAuthLogoutFunction(w http.ResponseWriter, r *http.Request) {
+	// session, err := r.Cookie("session")
+	// if err != nil {
+	// 	fmt.Println("The user is not signed in")
+	// 	fmt.Println(err)
+	// }
+
+	// session.Name = "session"
+	// session.Value = ""
+	// session.Path = "/"
+	// session.MaxAge = -1
+
+	// http.SetCookie(w, session)
+
+	// if err != nil {
+	// 	fmt.Println("Could not delete user session")
+	// }
+
+	gothic.Logout(w, r)
+	w.Header().Set("Location", "http://localhost:3000/login")
+	w.WriteHeader(http.StatusTemporaryRedirect)
+}
+
+func (s *Server) getAllHandler(w http.ResponseWriter, r *http.Request) {
+	rows, _ := s.db.GetAll()
+
+	jsonResp, err := json.Marshal(rows)
+	if err != nil {
+		log.Fatalf("error handling JSON marshal. Err: %v", err)
+	}
+
+	_, _ = w.Write(jsonResp)
+}
+
+func (s *Server) markDoneHandler(w http.ResponseWriter, r *http.Request) {
+	paramId := chi.URLParam(r, "id")
+
+	id, err := strconv.Atoi(paramId)
+
+	if err != nil {
+		log.Fatalf("Invalid ID. Err: %v", err)
 	}
 
 	s.db.MarkDone(int64(id))
 
 	rows, _ := s.db.GetAll()
 
-	return c.JSON(rows)
-}
-
-func (s *FiberServer) createHandler(c *fiber.Ctx) error {
-	var body NewTodo
-	err := json.Unmarshal(c.Body(), &body)
+	jsonResp, err := json.Marshal(rows)
 	if err != nil {
-		return err
+		log.Fatalf("error handling JSON marshal. Err: %v", err)
 	}
 
-	fmt.Println(body)
+	_, _ = w.Write(jsonResp)
+}
+
+func (s *Server) createHandler(w http.ResponseWriter, r *http.Request) {
+	var body models.NewTodo
+	json.NewDecoder(r.Body).Decode(&body)
 
 	id, err := s.db.Create(body.Title, body.Description)
 
 	fmt.Println(id)
+
 	if err != nil {
-		return err
+		log.Fatalf("error creating new todo. Err: %v", err)
 	}
 
 	rows, _ := s.db.GetAll()
 
-	return c.JSON(rows)
+	jsonResp, err := json.Marshal(rows)
+	if err != nil {
+		log.Fatalf("error handling JSON marshal. Err: %v", err)
+	}
+
+	_, _ = w.Write(jsonResp)
 }
 
-func (s *FiberServer) editHandler(c *fiber.Ctx) error {
-	id, err := c.ParamsInt("id")
+func (s *Server) editHandler(w http.ResponseWriter, r *http.Request) {
+	paramId := chi.URLParam(r, "id")
+
+	id, err := strconv.Atoi(paramId)
+
 	if err != nil {
-		return c.Status(401).SendString("Invalid id")
+		log.Fatalf("Invalid ID. Err: %v", err)
 	}
 
-	var body NewTodo
-	bodyErr := json.Unmarshal(c.Body(), &body)
-	if bodyErr != nil {
-		return c.Status(500).SendString(("Internal server error"))
+	var body models.NewTodo
+	err = json.NewDecoder(r.Body).Decode(&body)
+	if err != nil {
+		log.Fatalf("error handling JSON marshal. Err: %v", err)
 	}
 
-	fmt.Println(body)
+	_, err = s.db.Edit(id, body.Title, body.Description)
 
-	id, editErr := s.db.Edit(id, body.Title, body.Description)
-
-	fmt.Println(id)
-
-	if editErr != nil {
-		return editErr
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	rows, _ := s.db.GetAll()
 
-	return c.JSON(rows)
+	jsonResp, err := json.Marshal(rows)
+	if err != nil {
+		log.Fatalf("error handling JSON marshal. Err: %v", err)
+	}
+
+	_, _ = w.Write(jsonResp)
 }
