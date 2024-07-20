@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/raziel-aleman/go-todo-app/internal/auth"
 	"github.com/raziel-aleman/go-todo-app/internal/models"
 
 	"github.com/go-chi/chi/v5"
@@ -31,37 +32,23 @@ func (s *Server) RegisterRoutes() http.Handler {
 
 	r.Use(middleware.Logger)
 
-	r.Get("/", s.HelloWorldHandler)
-
 	r.Get("/health", s.healthHandler)
 
 	r.Get("/auth/{provider}/callback", s.getAuthCallbackFunction)
 
-	r.Get("/auth/logout/{provider}", s.getAuthLogoutFunction)
-
 	r.Get("/auth/{provider}", s.getAuthLoginFunction)
 
-	r.Get("/api/todos", s.getAllHandler)
+	r.Get("/auth/logout/{provider}", s.getAuthLogoutFunction)
 
-	r.Patch("/api/todos/{id}/done", s.markDoneHandler)
+	r.Get("/api/todos", auth.RequireAuth(s.getAllHandler))
 
-	r.Post("/api/todos", s.createHandler)
+	r.Patch("/api/todos/{id}/done", auth.RequireAuth(s.markDoneHandler))
 
-	r.Patch("/api/todos/{id}/edit", s.editHandler)
+	r.Post("/api/todos", auth.RequireAuth(s.createHandler))
+
+	r.Patch("/api/todos/{id}/edit", auth.RequireAuth(s.editHandler))
 
 	return r
-}
-
-func (s *Server) HelloWorldHandler(w http.ResponseWriter, r *http.Request) {
-	resp := make(map[string]string)
-	resp["message"] = "Hello World"
-
-	jsonResp, err := json.Marshal(resp)
-	if err != nil {
-		log.Fatalf("error handling JSON marshal. Err: %v", err)
-	}
-
-	_, _ = w.Write(jsonResp)
 }
 
 func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
@@ -94,39 +81,24 @@ func (s *Server) getAuthCallbackFunction(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	fmt.Println(user)
-	s.db.SaveUser(user)
+	fmt.Println(user.Name)
 
-	// store := sessions.NewCookieStore([]byte("super-secret-key"))
+	err = auth.StoreUserSession(w, r, user)
+	if err != nil {
+		log.Println(err)
+		return
+	}
 
-	// session, _ := store.Get(r, "session")
-	// session.Values["authenticated"] = true
-	// session.Values["name"] = user.Name
-	// session.Values["access_token"] = user.AccessToken
-	// session.Save(r, w)
+	//s.db.SaveUser(user)
 
-	http.Redirect(w, r, "http://localhost:3000/home", http.StatusFound)
+	http.Redirect(w, r, "http://localhost:3000/", http.StatusFound)
 }
 
 func (s *Server) getAuthLogoutFunction(w http.ResponseWriter, r *http.Request) {
-	// session, err := r.Cookie("session")
-	// if err != nil {
-	// 	fmt.Println("The user is not signed in")
-	// 	fmt.Println(err)
-	// }
-
-	// session.Name = "session"
-	// session.Value = ""
-	// session.Path = "/"
-	// session.MaxAge = -1
-
-	// http.SetCookie(w, session)
-
-	// if err != nil {
-	// 	fmt.Println("Could not delete user session")
-	// }
-
 	gothic.Logout(w, r)
+
+	auth.RemoveUserSession(w, r)
+
 	w.Header().Set("Location", "http://localhost:3000/login")
 	w.WriteHeader(http.StatusTemporaryRedirect)
 }

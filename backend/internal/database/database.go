@@ -45,13 +45,6 @@ var (
 	dbInstance *service
 )
 
-// type Todo struct {
-// 	ID    int    `json:"id"`
-// 	Title string `json:"title"`
-// 	Done  bool   `json:"done"`
-// 	Body  string `json:"body"`
-// }
-
 func New() Service {
 	// Reuse Connection
 	if dbInstance != nil {
@@ -67,12 +60,11 @@ func New() Service {
 
 	// Users table initializaiton query if it does not exist
 	const createUsersTable string = `CREATE TABLE IF NOT EXISTS users (
-		userId INTERGER NOT NULL PRIMARY KEY,
+		userId TEXT NOT NULL PRIMARY KEY,
 		name TEXT NOT NULL,
 		email	TEXT NOT NULL,
 		avatarUrl DATE NOT NULL,
 		accessToken TEXT NOT NULL,
-		refreshToken TEXT NOT NULL,
 		expiresAt DATE NOT NULL
 	);`
 
@@ -88,7 +80,7 @@ func New() Service {
 		title TEXT NOT NULL,
 		description	TEXT NOT NULL,
 		done INTEGER NOT NULL DEFAULT 0,
-		userId INTEGER NOT NULL,
+		userId TEXT NOT NULL,
 		FOREIGN KEY (userId) REFERENCES users (userId)
 	);`
 
