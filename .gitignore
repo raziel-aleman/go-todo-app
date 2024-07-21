@@ -1,2 +1,5 @@
 # macos DS file
 *.DS_Store
+
+# database
+*.db
