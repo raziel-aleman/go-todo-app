@@ -7,6 +7,7 @@ import { Box, List, MantineProvider, ThemeIcon } from "@mantine/core";
 import AddTodo from "./components/AddTodo";
 import { CheckCircleFillIcon } from "@primer/octicons-react";
 import EditTodo from "./components/EditTodo";
+import { redirect } from "react-router-dom";
 
 export interface Todo {
 	id: number;
@@ -17,11 +18,37 @@ export interface Todo {
 
 export const ENDPOINT = "http://localhost:8080";
 
-const fetcher = (url: string) =>
-	fetch(`${ENDPOINT}/${url}`).then((res) => res.json());
+// const fetcher = (url: string) =>
+// 	fetch(`${ENDPOINT}/${url}`, {
+// 		method: "GET",
+// 		credentials: 'include',
+// 		// headers: {
+// 		// 	"Cookie": document.cookie.split('; ').filter(row => row.startsWith('session_id=')).map(c=>c.split('=')[1])[0],
+// 		// }
+// 	}).then((res) => res.json());
+
+const fetcher = async (url: string) => {
+	const res = await fetch(`${ENDPOINT}/${url}`, {
+		method: "GET",
+		credentials: "include",
+	});
+
+	// If the status code is not in the range 200-299,
+	// we redirect to login page to get new session
+	if (!res.ok) {
+		const error = new Error("An error occurred while fetching the data.");
+		throw error;
+	}
+
+	return res.json();
+};
 
 export function App() {
-	const { data, mutate } = useSWR<Todo[]>("api/todos", fetcher);
+	const { data, error, mutate } = useSWR<Todo[]>("api/todos", fetcher);
+
+	if (error) {
+		window.location.href = "http://localhost:3000/login";
+	}
 
 	const handleLogout = () => {
 		window.location.href = "http://localhost:8080/auth/logout/github";
@@ -30,7 +57,16 @@ export function App() {
 	const markTodoAddDone = async (id: number) => {
 		const updated = await fetch(`${ENDPOINT}/api/todos/${id}/done`, {
 			method: "PATCH",
-		}).then((res) => res.json());
+			credentials: "include",
+			// headers: {
+			// 	"Cookie": document.cookie.split('; ').filter(row => row.startsWith('session_id=')).map(c=>c.split('=')[1])[0],
+			// }
+		})
+			.then((res) => res.json())
+			.catch((err) => {
+				console.log(err);
+				redirect("localhost:3000/login");
+			});
 
 		mutate(updated);
 	};

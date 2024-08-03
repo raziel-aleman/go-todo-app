@@ -25,15 +25,17 @@ type Service interface {
 	// It returns an error if the connection cannot be closed.
 	Close() error
 
-	GetAll() ([]m.Todo, error)
+	GetAll(string) ([]m.Todo, error)
 
-	MarkDone(int64) (int, error)
+	MarkDone(int64) error
 
-	Create(string, string) (int, error)
+	Create(m.NewTodo, string) (int, error)
 
-	Edit(int, string, string) (int, error)
+	Edit(int, m.NewTodo, string) error
 
-	SaveUser(goth.User) (string, error)
+	SaveUser(goth.User, string) (string, error)
+
+	IsSessionIdValid(string) (string, error)
 }
 
 type service struct {
@@ -41,7 +43,8 @@ type service struct {
 }
 
 var (
-	dburl      = os.Getenv("DB_URL")
+	// db url parameters for WAL mode, timeout for concurrent writes, and for foreing key checking
+	dburl      = os.Getenv("DB_URL") + "?_journal=WAL&_timeout=5000&_fk=true"
 	dbInstance *service
 )
 
@@ -58,9 +61,9 @@ func New() Service {
 		log.Fatal(err)
 	}
 
-	// Users table initializaiton query if it does not exist
+	// Users table initialization query if it does not exist
 	const createUsersTable string = `CREATE TABLE IF NOT EXISTS users (
-		userId TEXT NOT NULL PRIMARY KEY,
+		id TEXT NOT NULL PRIMARY KEY,
 		name TEXT NOT NULL,
 		email	TEXT NOT NULL,
 		avatarUrl DATE NOT NULL,
@@ -70,7 +73,7 @@ func New() Service {
 
 	// Execute initialization query
 	if _, err := db.Exec(createUsersTable); err != nil {
-		fmt.Println("Error creating User table")
+		log.Println("Error creating User table")
 		log.Fatal(err)
 	}
 
@@ -81,12 +84,26 @@ func New() Service {
 		description	TEXT NOT NULL,
 		done INTEGER NOT NULL DEFAULT 0,
 		userId TEXT NOT NULL,
-		FOREIGN KEY (userId) REFERENCES users (userId)
+		FOREIGN KEY (userId) REFERENCES users (id) ON DELETE CASCADE
 	);`
 
 	// Execute initialization query
 	if _, err := db.Exec(createTodosTable); err != nil {
-		fmt.Println("Error creating Todo table")
+		log.Println("Error creating Todo table")
+		log.Fatal(err)
+	}
+
+	// Todos table initializaiton query if it does not exist
+	const createSessionsTable string = `CREATE TABLE IF NOT EXISTS sessions (
+		id TEXT NOT NULL PRIMARY KEY,
+		expiresAt DATE NOT NULL,
+		userId TEXT NOT NULL,
+		FOREIGN KEY (userId) REFERENCES users (id) ON DELETE CASCADE
+	);`
+
+	// Execute initialization query
+	if _, err := db.Exec(createSessionsTable); err != nil {
+		log.Println("Error creating Sessions table")
 		log.Fatal(err)
 	}
 
@@ -156,13 +173,13 @@ func (s *service) Close() error {
 	return s.db.Close()
 }
 
-// Retrieves all todos
-func (s *service) GetAll() ([]m.Todo, error) {
+/* Retrieves all todos. Takes the userId (string) and returns an array of Todos ([]m.Todo) and an error. */
+func (s *service) GetAll(userId string) ([]m.Todo, error) {
 	todos := []m.Todo{}
-	rows, err := s.db.Query("SELECT * FROM todos")
+	rows, err := s.db.Query("SELECT id, title, description, done FROM todos WHERE userId=?", userId)
 	if err != nil {
 		log.Fatal("Error selecting todos from database")
-		return nil, nil
+		return []m.Todo{}, nil
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -170,85 +187,127 @@ func (s *service) GetAll() ([]m.Todo, error) {
 		err := rows.Scan(&todo.ID, &todo.Title, &todo.Body, &todo.Done)
 		if err != nil {
 			log.Fatal("Error scanning todos from select")
-			return nil, nil
+			return []m.Todo{}, nil
 		}
 		todos = append(todos, todo)
 	}
 	return todos, nil
 }
 
-// Marks todo as done
-func (s *service) MarkDone(id int64) (int, error) {
-	currentValue := 0
+/* Marks todo as done. Takes the Todo id (int64) and returns the Todo id (int) and an error. */
+func (s *service) MarkDone(id int64) error {
+	var currentValue int
+	var isDone int
 	row := s.db.QueryRow("SELECT Done FROM todos WHERE id=?;", id)
 	row.Scan(&currentValue)
 
 	if currentValue == 0 {
-		_, err := s.db.Exec("UPDATE todos SET done=? WHERE id=?;", 1, id)
-		if err != nil {
-			return 0, err
-		}
+		isDone = 1
 	} else {
-		_, err := s.db.Exec("UPDATE todos SET done=? WHERE id=?;", 0, id)
-		if err != nil {
-			return 0, err
-		}
+		isDone = 0
 	}
-	return int(id), nil
+
+	// Mark Todo as done or not done depending on current status
+	_, err := s.db.Exec("UPDATE todos SET done=? WHERE id=?;", isDone, id)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
-// Creates new todo
-func (s *service) Create(title string, description string) (int, error) {
-	res, err := s.db.Exec("INSERT INTO todos VALUES(NULL,?,?,?);", title, description, 0)
+/* Creates new Todo. Takes a Todo struct and returns an id (int) and an error. */
+func (s *service) Create(todo m.NewTodo, userId string) (int, error) {
+	res, err := s.db.Exec("INSERT INTO todos VALUES(NULL,?,?,?,?);", todo.Title, todo.Description, 0, userId)
 
 	if err != nil {
+		log.Println("error trying to insert new todo into database")
 		return -1, err
 	}
 
 	var id int64
 
 	if id, err = res.LastInsertId(); err != nil {
+		log.Println("error retreiving last inserted id")
 		return -1, err
 	}
 
 	return int(id), nil
 }
 
-// Edit todo
-func (s *service) Edit(id int, newTitle string, newDescription string) (int, error) {
-	_, err := s.db.Exec("UPDATE todos SET title=?, description=? WHERE id=?;", newTitle, newDescription, int64(id))
+/* Edit Todo. Takes an EditedTodo struct and returnds an id (int) and an error. */
+func (s *service) Edit(id int, newData m.NewTodo, userId string) error {
+	_, err := s.db.Exec("UPDATE todos SET title=?, description=? WHERE id=? AND userId=?;", newData.Title, newData.Description, int64(id), userId)
 	if err != nil {
-		return 0, err
+		return err
 	}
 
-	return int(id), nil
+	return nil
 }
 
-// Save user to DB upon successful login
-func (s *service) SaveUser(user goth.User) (string, error) {
-	var userExists bool
+/* Save user to database upon successful login and creates new session. */
+func (s *service) SaveUser(user goth.User, sessionId string) (string, error) {
+	var userId string
 
-	// Query for a value based on a single row.
-	if err := s.db.QueryRow("SELECT userID FROM users WHERE userId = ?;",
-		user.UserID).Scan(&userExists); err != nil {
+	// If userId does not exists, insert user and session in database
+	if err := s.db.QueryRow("SELECT id FROM users WHERE id = ?;",
+		user.UserID).Scan(&userId); err != nil {
 		if err == sql.ErrNoRows {
-			_, err := s.db.Exec("INSERT INTO users VALUES(?,?,?,?,?,?,?);",
+			_, err := s.db.Exec("INSERT INTO users VALUES(?,?,?,?,?,?);",
 				user.UserID,
 				user.Name,
 				user.Email,
 				user.AvatarURL,
 				user.AccessToken,
-				user.RefreshToken,
 				user.ExpiresAt)
 
 			if err != nil {
-				fmt.Println("could not insert new user to database")
+				log.Println("could not insert new user to database")
 				return string(0), err
 			}
 
-			return user.UserID, nil
+			_, err = s.db.Exec("INSERT INTO sessions VALUES(?,date('now','+14 day'),?);",
+				sessionId,
+				user.UserID)
+
+			if err != nil {
+				log.Println("could not insert session to database")
+				return string(0), err
+			}
+
+			return sessionId, nil
 		}
 	}
-	fmt.Println("user already exists in database")
-	return string(0), fmt.Errorf("user already exists in database")
+
+	// If userId exists, expire previous active session if they exist and insert new session for user upon re-login
+	_, err := s.db.Exec("UPDATE sessions SET expiresAt=date('now','-1 day') WHERE expiresAt>=date('now') AND userId=?;", user.UserID)
+	if err != nil {
+		log.Println("an error ocurred when trying to expire previous active sessions")
+		return string(0), err
+	}
+
+	_, err = s.db.Exec("INSERT INTO sessions VALUES(?,date('now','+14 day'),?);",
+		sessionId,
+		user.UserID)
+
+	if err != nil {
+		log.Println("an error ocurred when trying to insert new session to database")
+		return string(0), err
+	}
+
+	return sessionId, nil
+}
+
+/* Validates session. Takes sessionId (string) and returns userId (string) if valid and an error */
+func (s *service) IsSessionIdValid(sessionId string) (string, error) {
+	var userId string
+	if err := s.db.QueryRow("SELECT userId FROM sessions WHERE id = ? AND expiresAt > date('now');",
+		sessionId).Scan(&userId); err != nil {
+		if err == sql.ErrNoRows {
+			log.Println("no valid session exists in the database, please login")
+			return string(0), err
+		}
+	}
+
+	return userId, nil
 }

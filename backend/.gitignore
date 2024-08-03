@@ -30,6 +30,8 @@ main
 
 # Database
 *.db
+*.db-shm
+*.db-wal
 
 # macos DS file
 *.DS_Store

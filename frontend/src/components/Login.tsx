@@ -1,9 +1,23 @@
 import { Box, Button, MantineProvider, Text } from "@mantine/core";
 
+const isSessionIdValid = await fetch(
+	`http://localhost:8080/auth/validate`,
+	{
+		method: "GET",
+		credentials: "include",
+	}
+).then((res) => res.json());
+
 const Login = () => {
 	const handleLogin = () => {
 		window.location.href = "http://localhost:8080/auth/github";
 	};
+
+	console.log(isSessionIdValid)
+
+	if (isSessionIdValid["userId"]) {
+		window.location.href = "http://localhost:3000/";
+	}
 
 	return (
 		<MantineProvider>
